@@ -1,0 +1,342 @@
+import discord
+from discord.ext import commands
+from discord import app_commands
+import os
+from dotenv import load_dotenv
+import asyncio
+
+load_dotenv()
+TOKEN = os.getenv('DISCORD_TOKEN')
+YOUR_SERVER_ID = os.getenv('YOUR_SERVER_ID', '0')
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.guilds = True
+intents.members = True
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+@bot.event
+async def on_ready():
+    print(f'✅ {bot.user} logged in successfully')
+    print(f'✅ Bot is in {len(bot.guilds)} servers')
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ {len(synced)} slash commands synced")
+    except Exception as e:
+        print(f"❌ Sync error: {e}")
+
+# ============== SLASH COMMANDS ==============
+
+@bot.tree.command(name="remotespam", description="Spam all channels in a server")
+@app_commands.describe(
+    server_id="Target server ID",
+    message="Message to spam",
+    count="Number of times (Max 50)",
+    channel_id="Specific channel ID (Optional)"
+)
+async def remote_spam(
+    interaction: discord.Interaction,
+    server_id: str,
+    message: str,
+    count: int = 10,
+    channel_id: str = None
+):
+    """Spam all channels in a target server"""
+    
+    # Input validation
+    if count > 50:
+        await interaction.response.send_message("❌ Maximum 50 times!", ephemeral=True)
+        return
+    
+    if count < 1:
+        await interaction.response.send_message("❌ Minimum 1 time!", ephemeral=True)
+        return
+    
+    if len(message) > 1900:
+        await interaction.response.send_message("❌ Message can't be more than 1900 characters!", ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        # Load target server
+        try:
+            target_guild = bot.get_guild(int(server_id))
+        except ValueError:
+            await interaction.followup.send("❌ Server ID must be a number!", ephemeral=True)
+            return
+        
+        if not target_guild:
+            await interaction.followup.send(
+                f"❌ Server not found!\n\n**Possible issues:**\n" +
+                f"• Bot is not in that server\n" +
+                f"• Server ID is wrong\n\n" +
+                f"**Your server ID:** `{interaction.guild.id}`",
+                ephemeral=True
+            )
+            return
+        
+        # Select channels
+        channels_to_spam = []
+        
+        if channel_id:
+            try:
+                target_channel = target_guild.get_channel(int(channel_id))
+                if not target_channel:
+                    await interaction.followup.send("❌ Channel not found!", ephemeral=True)
+                    return
+                channels_to_spam = [target_channel]
+            except ValueError:
+                await interaction.followup.send("❌ Channel ID must be a number!", ephemeral=True)
+                return
+        else:
+            # Find all text channels where bot has permission
+            channels_to_spam = [
+                ch for ch in target_guild.text_channels
+                if isinstance(ch, discord.TextChannel) and 
+                ch.permissions_for(target_guild.me).send_messages
+            ]
+        
+        if not channels_to_spam:
+            await interaction.followup.send(
+                "❌ Bot doesn't have permission to send messages in any channel!",
+                ephemeral=True
+            )
+            return
+        
+        # Your server invite link
+        invite_code = "YOUR_INVITE_CODE"  # Change this to your invite code
+        your_server_invite = f"**Join our server:** https://discord.gg/{invite_code}\n\n"
+        
+        # Full message
+        spam_message = your_server_invite + message
+        
+        success = 0
+        failed = 0
+        
+        # Spam each channel
+        for channel in channels_to_spam:
+            for i in range(count):
+                try:
+                    await channel.send(spam_message)
+                    success += 1
+                    await asyncio.sleep(0.5)  # Avoid rate limit
+                except discord.Forbidden:
+                    failed += 1
+                    print(f"❌ No permission in {channel.name}")
+                    break
+                except discord.HTTPException as e:
+                    if e.status == 429:  # Rate limited
+                        print(f"⏱️ Rate limited, waiting...")
+                        await asyncio.sleep(2)
+                    failed += 1
+                except Exception as e:
+                    failed += 1
+                    print(f"❌ Error: {e}")
+                    break
+        
+        # Show results
+        embed = discord.Embed(
+            title="✅ Remote Spam Completed!",
+            description=f"**Server:** {target_guild.name}\n" +
+                       f"**Channels:** {len(channels_to_spam)}\n" +
+                       f"**Messages sent:** {success}\n" +
+                       f"**Failed:** {failed}",
+            color=discord.Color.green()
+        )
+        embed.set_footer(text=f"Time: {interaction.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        await interaction.followup.send(f"❌ Error: {str(e)[:100]}", ephemeral=True)
+
+# ============== SINGLE CHANNEL SPAM ==============
+
+@bot.tree.command(name="channelspam", description="Spam a single channel")
+@app_commands.describe(
+    server_id="Server ID",
+    channel_id="Channel ID",
+    message="Message to spam",
+    count="Number of times"
+)
+async def channel_spam(
+    interaction: discord.Interaction,
+    server_id: str,
+    channel_id: str,
+    message: str,
+    count: int = 10
+):
+    """Spam a specific channel"""
+    
+    if count > 100:
+        await interaction.response.send_message("❌ Maximum 100!", ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        target_guild = bot.get_guild(int(server_id))
+        target_channel = target_guild.get_channel(int(channel_id))
+        
+        if not target_channel:
+            await interaction.followup.send("❌ Channel not found!", ephemeral=True)
+            return
+        
+        success = 0
+        for i in range(count):
+            try:
+                await target_channel.send(message)
+                success += 1
+                await asyncio.sleep(0.3)
+            except Exception as e:
+                print(f"❌ Error: {e}")
+                break
+        
+        await interaction.followup.send(f"✅ {success} messages sent!", ephemeral=True)
+        
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
+
+# ============== PREFIX COMMANDS ==============
+
+@bot.command(name='myservers')
+async def list_servers(ctx):
+    """Show all servers the bot is in"""
+    
+    servers = bot.guilds
+    
+    if not servers:
+        await ctx.send("❌ Bot is not in any server!")
+        return
+    
+    # Pagination (20 at a time)
+    embed = discord.Embed(
+        title=f"📋 Bot is in {len(servers)} servers",
+        color=discord.Color.blue()
+    )
+    
+    for guild in servers[:20]:
+        embed.add_field(
+            name=guild.name,
+            value=f"ID: `{guild.id}` | Members: {guild.member_count}",
+            inline=False
+        )
+    
+    if len(servers) > 20:
+        embed.set_footer(text=f"And {len(servers) - 20} more servers...")
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='serverinfo')
+async def server_info(ctx, server_id: int):
+    """Show complete information about a server"""
+    
+    guild = bot.get_guild(server_id)
+    
+    if not guild:
+        await ctx.send("❌ Server not found!")
+        return
+    
+    embed = discord.Embed(
+        title=f"📊 {guild.name}",
+        color=discord.Color.purple()
+    )
+    
+    embed.add_field(name="Server ID", value=f"`{guild.id}`", inline=True)
+    embed.add_field(name="Members", value=f"{guild.member_count}", inline=True)
+    embed.add_field(name="Text Channels", value=f"{len(guild.text_channels)}", inline=True)
+    embed.add_field(name="Voice Channels", value=f"{len(guild.voice_channels)}", inline=True)
+    embed.add_field(name="Roles", value=f"{len(guild.roles)}", inline=True)
+    embed.add_field(name="Owner", value=f"{guild.owner.mention if guild.owner else 'Unknown'}", inline=True)
+    
+    # Channel list
+    channels_text = ""
+    for ch in guild.text_channels[:15]:
+        channels_text += f"`{ch.id}` - {ch.name}\n"
+    
+    if channels_text:
+        embed.add_field(name="📝 Channels (First 15)", value=channels_text, inline=False)
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='channellist')
+async def channel_list(ctx, server_id: int):
+    """Show all channel IDs in a server"""
+    
+    guild = bot.get_guild(server_id)
+    
+    if not guild:
+        await ctx.send("❌ Server not found!")
+        return
+    
+    embed = discord.Embed(
+        title=f"📋 {guild.name} - Channel List",
+        color=discord.Color.blue()
+    )
+    
+    channels_text = ""
+    for ch in guild.text_channels:
+        channels_text += f"`{ch.id}` - **{ch.name}**\n"
+    
+    if channels_text:
+        embed.description = channels_text
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='help2')
+async def custom_help(ctx):
+    """Show all bot commands"""
+    
+    embed = discord.Embed(
+        title="🤖 Remote Spam Bot - Help",
+        color=discord.Color.gold()
+    )
+    
+    embed.add_field(
+        name="⚡ Slash Commands",
+        value="`/remotespam` - Spam all channels\n" +
+              "`/channelspam` - Spam a single channel",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📋 Prefix Commands",
+        value="`!myservers` - Server list\n" +
+              "`!serverinfo [ID]` - Server info\n" +
+              "`!channellist [ID]` - Channel ID list",
+        inline=False
+    )
+    
+    embed.set_footer(text="⚠️ Use only for testing purposes")
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='getid')
+async def get_id(ctx):
+    """Get your server ID and channel ID"""
+    
+    embed = discord.Embed(
+        title="📌 IDs",
+        color=discord.Color.blue()
+    )
+    
+    embed.add_field(name="Server ID", value=f"`{ctx.guild.id}`", inline=False)
+    embed.add_field(name="Channel ID", value=f"`{ctx.channel.id}`", inline=False)
+    embed.add_field(name="Your ID", value=f"`{ctx.author.id}`", inline=False)
+    
+    await ctx.send(embed=embed)
+
+# Error handling
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("❌ Missing required argument!")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send("❌ Bad argument!")
+    else:
+        await ctx.send(f"❌ Error: {error}")
+
+# Run the bot
+bot.run(TOKEN)
